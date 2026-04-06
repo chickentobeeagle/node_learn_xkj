@@ -5,9 +5,12 @@ const { close, initSchema, initBlogSchema, run } = require("../src/db/sqlite-db"
 const {
   validatePostDetailParams,
   normalizePostSearchQuery,
+  normalizeUserListQuery,
+  normalizePostStatsQuery,
   validateAdvancedPostSearchBody,
 } = require("../src/app/request-validators");
-const { getPostDetail, searchPosts, searchPostsAdvanced } = require("../src/services/blog-service");
+const { getPostDetail, searchPosts, searchPostsAdvanced, listPostStats } = require("../src/services/blog-service");
+const { listUsers } = require("../src/services/users-service");
 
 // 创建内存 SQLite 数据库，避免测试污染真实 data/app.db。
 async function createMemoryDatabase() {
@@ -56,6 +59,21 @@ async function seedBlogFixture(db) {
     db,
     "INSERT INTO posts (id, user_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
     [2, 2, "Node Search Tips", "Advanced search body example", now, now]
+  );
+  await run(
+    db,
+    "INSERT INTO comments (id, post_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [1, 1, 2, "First comment", now, now]
+  );
+  await run(
+    db,
+    "INSERT INTO comments (id, post_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [2, 1, 1, "Second comment", now, now]
+  );
+  await run(
+    db,
+    "INSERT INTO comments (id, post_id, user_id, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [3, 2, 1, "Third comment", now, now]
   );
 }
 
@@ -122,6 +140,76 @@ test("normalizePostSearchQuery: pageSize 超限时收敛为 50，并保留合法
     keyword: "SQLite",
     authorId: 1,
     sortBy: "created_at",
+    sortOrder: "ASC",
+  });
+});
+
+test("normalizeUserListQuery: 空 query 使用默认值，并清理 keyword 与时间区间空格", () => {
+  const result = normalizeUserListQuery({
+    keyword: "  alice  ",
+    createdFrom: " 2026-03-01T00:00:00.000Z ",
+    createdTo: " 2026-03-31T23:59:59.999Z ",
+  });
+
+  assert.deepEqual(result, {
+    page: 1,
+    pageSize: 10,
+    keyword: "alice",
+    sortBy: "id",
+    sortOrder: "DESC",
+    createdFrom: "2026-03-01T00:00:00.000Z",
+    createdTo: "2026-03-31T23:59:59.999Z",
+  });
+});
+
+test("normalizeUserListQuery: pageSize 超限时收敛为 50，并保留合法排序", () => {
+  const result = normalizeUserListQuery({
+    page: "2",
+    pageSize: "999",
+    sortBy: "created_at",
+    sortOrder: "ASC",
+  });
+
+  assert.deepEqual(result, {
+    page: 2,
+    pageSize: 50,
+    keyword: "",
+    sortBy: "created_at",
+    sortOrder: "ASC",
+    createdFrom: "",
+    createdTo: "",
+  });
+});
+
+test("normalizePostStatsQuery: 非法 minComments 回退到 0，排序字段按白名单收敛", () => {
+  const result = normalizePostStatsQuery({
+    minComments: "abc",
+    sortBy: "not-allowed",
+  });
+
+  assert.deepEqual(result, {
+    page: 1,
+    pageSize: 10,
+    minComments: 0,
+    sortBy: "id",
+    sortOrder: "DESC",
+  });
+});
+
+test("normalizePostStatsQuery: pageSize 超限时收敛为 50，保留 comment_count 排序", () => {
+  const result = normalizePostStatsQuery({
+    page: "3",
+    pageSize: "200",
+    minComments: "2",
+    sortBy: "comment_count",
+    sortOrder: "ASC",
+  });
+
+  assert.deepEqual(result, {
+    page: 3,
+    pageSize: 50,
+    minComments: 2,
+    sortBy: "comment_count",
     sortOrder: "ASC",
   });
 });
@@ -244,5 +332,59 @@ test("searchPostsAdvanced: 合法过滤条件可正常返回 200", async () => {
     assert.equal(result.payload.data.pageSize, 50);
     assert.equal(result.payload.data.list.length, 1);
     assert.equal(result.payload.data.list[0].id, 1);
+  });
+});
+
+test("listUsers: 空 query 使用默认分页", async () => {
+  await withSeededBlogDb(async (db) => {
+    const result = await listUsers(db, {});
+
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.data.page, 1);
+    assert.equal(result.payload.data.pageSize, 10);
+    assert.equal(result.payload.data.list.length, 2);
+  });
+});
+
+test("listUsers: pageSize 超限时限制为 50，非法排序字段回退默认值", async () => {
+  await withSeededBlogDb(async (db) => {
+    const result = await listUsers(db, {
+      pageSize: "999",
+      sortBy: "hack",
+      keyword: " Alice ",
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.data.pageSize, 50);
+    assert.equal(result.payload.data.list.length, 1);
+    assert.equal(result.payload.data.list[0].name, "Alice");
+  });
+});
+
+test("listPostStats: 空 query 使用默认分页", async () => {
+  await withSeededBlogDb(async (db) => {
+    const result = await listPostStats(db, {});
+
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.data.page, 1);
+    assert.equal(result.payload.data.pageSize, 10);
+    assert.equal(result.payload.data.list.length, 2);
+  });
+});
+
+test("listPostStats: 可按 minComments 和 comment_count 排序过滤", async () => {
+  await withSeededBlogDb(async (db) => {
+    const result = await listPostStats(db, {
+      minComments: "2",
+      sortBy: "comment_count",
+      sortOrder: "DESC",
+      pageSize: "999",
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(result.payload.data.pageSize, 50);
+    assert.equal(result.payload.data.list.length, 1);
+    assert.equal(result.payload.data.list[0].id, 1);
+    assert.equal(result.payload.data.list[0].comment_count, 2);
   });
 });

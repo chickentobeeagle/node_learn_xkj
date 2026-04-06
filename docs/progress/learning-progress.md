@@ -485,3 +485,63 @@
   - query 适合轻量筛选；body 适合复杂组合条件
   - body 检索同样要做分页上限、排序白名单、参数归一化
   - “路由收参数 -> service 归一化 -> repo 组 SQL”的链路已形成固定心智模型
+
+## Week 3 进展 - 2026-04-01（分层实战 Day 3 - 统一参数校验工具）
+- 今日目标：把 `GET /posts/:id`、`GET /posts/search`、`POST /posts/search-advanced` 里的重复参数处理抽成统一工具，减少 service 层重复代码
+- 实际完成：
+  - `src/app/request-validators.js` 新增 `validatePostDetailParams`
+  - `src/app/request-validators.js` 新增 `normalizePostSearchQuery`
+  - `src/app/request-validators.js` 新增 `validateAdvancedPostSearchBody`
+  - `src/services/blog-service.js` 的 `getPostDetail`、`searchPosts`、`searchPostsAdvanced` 改为调用统一参数工具
+- 一句话总结：开始把“参数怎么收、怎么校验、怎么归一化”从业务流程里拆出来，service 变得更聚焦。
+- 关键收获：
+  - `routes` 层继续只收请求，不负责参数规则判断
+  - `services` 层仍然拥有参数校验语义，但可把重复规则下沉到业务校验工具
+  - 原子工具（`parseId`、`parsePositiveInt`、排序白名单）和场景工具（文章详情/轻量搜索/高级搜索）适合分两层组织
+  - 抽象的标准不是“能不能抽”，而是“这段逻辑是不是稳定、重复、可复用”
+
+## Week 3 进展 - 2026-04-02（分层实战 Day 4 - 自动化测试入门）
+- 今日目标：为刚抽出来的参数工具和 service 关键路径补自动化测试，验证重构没有改坏行为
+- 实际完成：
+  - 新增 `test/request-validators.test.js`
+  - 用 `node:test` + `node:assert/strict` 为 `request-validators` 补纯函数测试
+  - 用内存 SQLite（`:memory:`）为 `getPostDetail`、`searchPosts`、`searchPostsAdvanced` 补 service 层行为测试
+  - `package.json` 的 `test` 脚本改为 `node --test`
+- 一句话总结：从“我觉得代码没问题”升级为“我能用测试证明这次重构没改坏行为”。
+- 关键收获：
+  - 纯函数最容易测试，适合从参数校验工具开始练手
+  - service 测试更关注业务承诺：`400/404/200` 是否正确，而不是内部实现细节
+  - 内存数据库适合做后端学习项目的最小隔离测试，不会污染真实数据文件
+  - 自动化测试是后续继续重构 service/repo 的安全网
+
+## Week 3 进展 - 2026-04-06（分层实战 Day 5 - 统一 Service 返回结果）
+- 今日目标：把 service 层大量重复的 `{ status, payload }` 返回结构抽成统一结果工具，进一步减少样板代码
+- 实际完成：
+  - `src/app/service-results.js` 新增 `ok`、`created`、`badRequest`、`notFound`、`conflict`、`internalError`
+  - `src/services/blog-service.js` 改为统一使用结果工具返回 `200/201/400/404/500`
+  - `src/services/users-service.js` 改为统一使用结果工具返回 `200/201/400/404/409/500`
+  - `src/app/request-validators.js` 的 `400` 参数错误也接入统一结果工具
+  - 新增 `test/service-results.test.js`，补齐统一结果工具的纯函数测试
+- 一句话总结：输入侧已经统一，输出侧也开始统一，service 层越来越像真正的业务编排层。
+- 关键收获：
+  - `sendJSON` 负责“怎么发响应”，`service-results` 负责“service 应该返回什么语义”
+  - `ok/notFound/internalError` 这类语义化函数能让 service 更容易读，也更容易统一状态码规范
+  - 抽象目标不是省几行代码，而是把稳定的返回协议收敛到一个地方维护
+  - 参数工具统一输入，结果工具统一输出，service 才真正专注业务分支判断
+
+## Week 3 进展 - 2026-04-06（分层实战 Day 6 - 统一列表 Query 工具）
+- 今日目标：继续把用户列表和文章统计里的重复 query 归一化逻辑抽成场景工具，让列表类 service 也保持统一写法
+- 实际完成：
+  - `src/app/request-validators.js` 新增 `normalizeUserListQuery`
+  - `src/app/request-validators.js` 新增 `normalizePostStatsQuery`
+  - `src/services/users-service.js` 的 `listUsers` 改为调用统一 query 工具
+  - `src/services/blog-service.js` 的 `listPostStats` 改为调用统一 query 工具
+  - `test/request-validators.test.js` 新增用户列表和文章统计的纯函数测试与 service 测试
+  - 修复 `src/repos/blog-repo-sqlite.js` 中聚合排序默认字段的歧义问题：默认排序从 `id` 调整为显式 `p.id`
+- 一句话总结：列表类接口的分页、排序、筛选也开始统一收口，service 层进一步变薄了。
+- 关键收获：
+  - `request-validators` 不只适合 `params/body`，也适合承接稳定的列表 query 规则
+  - 列表类 query 的核心模式是：默认值、页大小上限、排序白名单、筛选参数归一化
+  - 自动化测试不只是验证“抽象没改坏”，也能帮你抓出真实 SQL 细节问题
+  - 多表聚合查询里默认排序字段要写成带表前缀的列名，避免 `ORDER BY id` 这类歧义
+- 明天继续：可以开始考虑把“创建/更新”类接口里的 body 校验也继续场景化拆分，例如文章创建、评论创建、用户更新等输入规则

@@ -333,7 +333,8 @@ async function listPostsWithCommentStats(db) {
 // - 所以必须先在代码里做白名单判断，避免 SQL 注入风险。
 async function listPostsWithCommentStatsAdvanced(db, options) {
   const minComments = Number.isInteger(options.minComments) && options.minComments > 0 ? options.minComments : 0;
-  const sortBy = options.sortBy === "comment_count" ? "comment_count" : "id";
+  // 默认按文章主键排序时显式写 p.id，避免多表聚合场景下出现列名歧义。
+  const sortBy = options.sortBy === "comment_count" ? "comment_count" : "p.id";
   const sortOrder = options.sortOrder === "ASC" ? "ASC" : "DESC";
 
   const having = minComments > 0 ? "HAVING COUNT(c.id) >= ?" : "";
@@ -366,7 +367,8 @@ async function listPostsWithCommentStatsAdvanced(db, options) {
 // - 我们要的是“符合条件的文章有多少篇”，所以必须对分组后的结果再数一次。
 async function listPostsWithCommentStatsPage(db, options) {
   const minComments = Number.isInteger(options.minComments) && options.minComments > 0 ? options.minComments : 0;
-  const sortBy = options.sortBy === "comment_count" ? "comment_count" : "id";
+  // 默认按文章主键排序时显式写 p.id，避免多表聚合场景下出现列名歧义。
+  const sortBy = options.sortBy === "comment_count" ? "comment_count" : "p.id";
   const sortOrder = options.sortOrder === "ASC" ? "ASC" : "DESC";
   const page = Number.isInteger(options.page) && options.page > 0 ? options.page : 1;
   const pageSize = Number.isInteger(options.pageSize) && options.pageSize > 0 ? options.pageSize : 10;

@@ -6,42 +6,23 @@ const {
   updateUserById,
   deleteUserById,
 } = require("../repos/user-repo-sqlite");
-const { parseId, parsePositiveInt, normalizeSortBy, normalizeSortOrder } = require("../app/http");
+const { parseId } = require("../app/http");
+const { normalizeUserListQuery } = require("../app/request-validators");
+const { ok, created, badRequest, notFound, conflict, internalError } = require("../app/service-results");
 
 // 用户列表查询服务：
 // - 负责把 query 参数转成安全的查询选项
 // - 负责兜底默认值和 pageSize 上限
 // - SQL 执行交给 repo 层
 async function listUsers(db, query) {
-  // 页码参数，非法时回退到 1。
-  const page = parsePositiveInt(query.page, 1);
-  // 每页条数参数，非法时回退到 10。
-  const pageSize = parsePositiveInt(query.pageSize, 10);
-  // 限制最大条数，防止大分页拖慢接口。
-  const safePageSize = Math.min(pageSize, 50);
-  // 关键字筛选（用于 name/email 模糊匹配）。
-  const keyword = typeof query.keyword === "string" ? query.keyword : "";
-  // 排序字段白名单。
-  const sortBy = normalizeSortBy(query.sortBy);
-  // 排序方向标准化（ASC/DESC）。
-  const sortOrder = normalizeSortOrder(query.sortOrder);
-  // 创建时间区间筛选参数。
-  const createdFrom = typeof query.createdFrom === "string" ? query.createdFrom : "";
-  const createdTo = typeof query.createdTo === "string" ? query.createdTo : "";
+  // query 参数统一交给业务校验工具归一化。
+  const queryOptions = normalizeUserListQuery(query);
 
   try {
-    const result = await listUsersWithQuery(db, {
-      page,
-      pageSize: safePageSize,
-      keyword,
-      sortBy,
-      sortOrder,
-      createdFrom,
-      createdTo,
-    });
-    return { status: 200, payload: { message: "OK", data: result } };
+    const result = await listUsersWithQuery(db, queryOptions);
+    return ok(result);
   } catch (error) {
-    return { status: 500, payload: { code: 1, message: "读取用户列表失败", data: error.message } };
+    return internalError("读取用户列表失败", error);
   }
 }
 
@@ -49,17 +30,17 @@ async function listUsers(db, query) {
 async function getUserById(db, idValue) {
   const id = parseId(idValue);
   if (!id) {
-    return { status: 400, payload: { code: 1, message: "id 必须是正整数" } };
+    return badRequest("id 必须是正整数");
   }
 
   try {
     const user = await findUserById(db, id);
     if (!user) {
-      return { status: 404, payload: { code: 1, message: "用户不存在" } };
+      return notFound("用户不存在");
     }
-    return { status: 200, payload: { message: "OK", data: user } };
+    return ok(user);
   } catch (error) {
-    return { status: 500, payload: { code: 1, message: "读取用户详情失败", data: error.message } };
+    return internalError("读取用户详情失败", error);
   }
 }
 
@@ -67,18 +48,18 @@ async function getUserById(db, idValue) {
 async function createUserRecord(db, body) {
   const { name, email } = body || {};
   if (!name || !email) {
-    return { status: 400, payload: { code: 1, message: "缺少 name 或 email" } };
+    return badRequest("缺少 name 或 email");
   }
 
   try {
     const exists = await findUserByEmail(db, email);
     if (exists) {
-      return { status: 409, payload: { code: 1, message: "email 已存在" } };
+      return conflict("email 已存在");
     }
     const user = await createUser(db, { name, email });
-    return { status: 201, payload: { message: "用户已创建", data: user } };
+    return created(user, "用户已创建");
   } catch (error) {
-    return { status: 500, payload: { code: 1, message: "创建用户失败", data: error.message } };
+    return internalError("创建用户失败", error);
   }
 }
 
@@ -86,29 +67,29 @@ async function createUserRecord(db, body) {
 async function updateUserRecord(db, idValue, body) {
   const id = parseId(idValue);
   if (!id) {
-    return { status: 400, payload: { code: 1, message: "id 必须是正整数" } };
+    return badRequest("id 必须是正整数");
   }
 
   const { name, email } = body || {};
   if (!name && !email) {
-    return { status: 400, payload: { code: 1, message: "至少传入 name 或 email 其中一个字段" } };
+    return badRequest("至少传入 name 或 email 其中一个字段");
   }
 
   try {
     if (email) {
       const exists = await findUserByEmail(db, email);
       if (exists && exists.id !== id) {
-        return { status: 409, payload: { code: 1, message: "email 已存在" } };
+        return conflict("email 已存在");
       }
     }
 
     const user = await updateUserById(db, id, { name, email });
     if (!user) {
-      return { status: 404, payload: { code: 1, message: "用户不存在" } };
+      return notFound("用户不存在");
     }
-    return { status: 200, payload: { message: "用户已更新", data: user } };
+    return ok(user, "用户已更新");
   } catch (error) {
-    return { status: 500, payload: { code: 1, message: "更新用户失败", data: error.message } };
+    return internalError("更新用户失败", error);
   }
 }
 
@@ -116,17 +97,17 @@ async function updateUserRecord(db, idValue, body) {
 async function deleteUserRecord(db, idValue) {
   const id = parseId(idValue);
   if (!id) {
-    return { status: 400, payload: { code: 1, message: "id 必须是正整数" } };
+    return badRequest("id 必须是正整数");
   }
 
   try {
-    const ok = await deleteUserById(db, id);
-    if (!ok) {
-      return { status: 404, payload: { code: 1, message: "用户不存在" } };
+    const okToDelete = await deleteUserById(db, id);
+    if (!okToDelete) {
+      return notFound("用户不存在");
     }
-    return { status: 200, payload: { message: "用户已删除", data: { id } } };
+    return ok({ id }, "用户已删除");
   } catch (error) {
-    return { status: 500, payload: { code: 1, message: "删除用户失败", data: error.message } };
+    return internalError("删除用户失败", error);
   }
 }
 
